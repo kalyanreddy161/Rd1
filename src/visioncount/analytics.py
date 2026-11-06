@@ -1,4 +1,4 @@
-"""Directional line-crossing analytics for tracked people."""
+"""Directional crossing analytics for tracked people."""
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional
 import time
@@ -14,16 +14,28 @@ class CrossingEvent:
 
 
 class LineCrossingAnalytics:
-    """Count a track once when its centroid changes side of a horizontal line.
+    """Count centroid crossings of a horizontal or vertical virtual line.
 
-    The line is interpreted in image coordinates. Moving from above to below
-    is an entry; moving from below to above is an exit. This convention can be
-    changed in the dashboard depending on camera placement.
+    Negative-to-positive movement is IN by default: top-to-bottom for a
+    horizontal line and left-to-right for a vertical line.
     """
 
-    def __init__(self, line_y: int, cooldown_seconds: float = 0.75):
-        self.line_y = int(line_y)
+    def __init__(self, line_y: Optional[int] = None, cooldown_seconds: float = 0.75,
+                 orientation: str = "horizontal", line_position: Optional[int] = None,
+                 in_direction: str = "negative_to_positive"):
+        if orientation not in {"horizontal", "vertical"}:
+            raise ValueError("orientation must be 'horizontal' or 'vertical'")
+        if in_direction not in {"negative_to_positive", "positive_to_negative"}:
+            raise ValueError("invalid in_direction")
+        if line_position is None:
+            if line_y is None:
+                raise ValueError("line_position (or legacy line_y) is required")
+            line_position = line_y
+        self.orientation = orientation
+        self.line_position = int(line_position)
+        self.line_y = self.line_position if orientation == "horizontal" else None
         self.cooldown_seconds = float(cooldown_seconds)
+        self.in_direction = in_direction
         self.previous_side: Dict[int, int] = {}
         self.last_crossing: Dict[int, float] = {}
         self.entered = 0
@@ -33,32 +45,30 @@ class LineCrossingAnalytics:
     def update(self, track_id: int, center_x: int, center_y: int,
                timestamp_seconds: Optional[float] = None):
         now = time.monotonic() if timestamp_seconds is None else float(timestamp_seconds)
-        side = -1 if center_y < self.line_y else 1
+        coordinate = center_y if self.orientation == "horizontal" else center_x
+        side = -1 if coordinate < self.line_position else 1
         previous = self.previous_side.get(track_id)
         self.previous_side[track_id] = side
-
         if previous is None or previous == side:
             return None
-
         if now - self.last_crossing.get(track_id, float("-inf")) < self.cooldown_seconds:
             return None
 
-        # Above -> below is IN; below -> above is OUT.
-        direction = "IN" if previous == -1 and side == 1 else "OUT"
+        negative_to_positive = previous == -1 and side == 1
+        is_in = (negative_to_positive if self.in_direction == "negative_to_positive"
+                 else not negative_to_positive)
+        direction = "IN" if is_in else "OUT"
         self.last_crossing[track_id] = now
-        if direction == "IN":
+        if is_in:
             self.entered += 1
         else:
             self.exited += 1
-
         event = CrossingEvent(now, int(track_id), direction, int(center_x), int(center_y))
         self.events.append(event)
         return event
 
     @property
     def occupancy(self) -> int:
-        # This is a derived estimate. A video may begin mid-session or miss
-        # crossings, so it is not guaranteed to represent physical occupancy.
         return max(0, self.entered - self.exited)
 
     @property
