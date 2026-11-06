@@ -83,13 +83,10 @@ else:
                     status.info("Loading YOLO and processing frames. First run may download model weights.")
                     metrics = counter.process(input_path, output_path, update_progress)
                     video_bytes = output_path.read_bytes()
-                    heatmap_bytes = Path(metrics["heatmap_path"]).read_bytes()
 
                     st.success("Processing completed.")
-                    st.subheader("Annotated output video")
+                    st.subheader("Processed video — play it here")
                     st.video(video_bytes)
-                    st.download_button("Download annotated video", video_bytes,
-                                       "visioncount_annotated.mp4", "video/mp4")
 
                     a, b, c, d = st.columns(4)
                     a.metric("People entered", metrics["entered"])
@@ -97,8 +94,21 @@ else:
                     c.metric("Occupancy estimate", metrics["occupancy"])
                     d.metric("Processing FPS", f'{metrics["processing_fps"]:.1f}')
 
-                    st.subheader("Movement heatmap")
-                    st.image(heatmap_bytes, use_container_width=True)
+                    st.subheader("People count over video timeline")
+                    timeline = pd.DataFrame(metrics["timeline"])
+                    st.line_chart(
+                        timeline,
+                        x="video_time_seconds",
+                        y=["IN", "OUT"],
+                        x_label="Video timeline (seconds)",
+                        y_label="Number of people",
+                        height=380,
+                    )
+                    st.caption(
+                        "IN and OUT are cumulative crossing counts. The graph records "
+                        "one-second samples and additional points when a crossing occurs."
+                    )
+
                     events = pd.DataFrame(
                         metrics["events"],
                         columns=["timestamp_seconds", "track_id", "direction", "center_x", "center_y"],
@@ -109,7 +119,8 @@ else:
                                        events.to_csv(index=False).encode("utf-8"),
                                        "visioncount_events.csv", "text/csv")
                     st.caption(
-                        f'Processed {metrics["frames"]} frames. '
+                        f'Processed {metrics["frames"]} frames over '
+                        f'{metrics["duration_seconds"]:.1f} seconds. '
                         f'Peak derived occupancy: {metrics["peak_occupancy"]}.'
                     )
                     st.warning(
@@ -121,4 +132,4 @@ else:
                 st.error(f"Processing failed: {exc}")
                 st.exception(exc)
     else:
-        st.info("Upload an MP4, AVI, MOV, or MKV file. The processed video will show bounding boxes, IDs, trajectories, and live counters.")
+        st.info("Upload an MP4, AVI, MOV, or MKV file. The processed video will play in this app with bounding boxes, IDs, trajectories, and counters.")
