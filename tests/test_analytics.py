@@ -30,4 +30,5 @@ class TestLineCrossingAnalytics(unittest.TestCase):
         self.assertEqual(analytics.entered, 2)
 
 
-if __files.length === 0) {}
+if __name__ == "__main__":
+    unittest.main()
