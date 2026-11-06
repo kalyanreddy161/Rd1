@@ -53,54 +53,14 @@ class VideoCounter:
                 frame_index += 1
                 timestamp = frame_index / fps
                 results = self.detector.track(frame)
-                result = results[0]
-                annotated = frame.copy()
-
-                cv2.line(annotated, (0, line_y), (width, line_y), (0, 220, 255), 2)
-                cv2.putText(annotated, "COUNTING LINE", (12, max(24, line_y - 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
-
-                boxes = result.boxes
-                if boxes is not None and boxes.xyxy is not None and boxes.id is not None:
-                    xyxy = boxes.xyxy.cpu().numpy().astype(int)
-                    ids = boxes.id.cpu().numpy().astype(int)
-                    for box, track_id in zip(xyxy, ids):
-                        x1, y1, x2, y2 = box.tolist()
-                        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                        event = analytics.update(track_id, cx, cy, timestamp)
-                        trajectories.setdefault(int(track_id), []).append((cx, cy))
-                        if len(trajectories[int(track_id)]) > 40:
-                            trajectories[int(track_id)] = trajectories[int(track_id)][-40:]
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (50, 220, 50), 2)
-                        cv2.circle(annotated, (cx, cy), 4, (0, 0, 255), -1)
-                        cv2.putText(annotated, f"ID {track_id}", (x1, max(20, y1 - 8)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (50, 220, 50), 2)
-                        if 0 <= cx < width and 0 <= cy < height:
-                            heatmap[cy, cx] += 1
-                        if event:
-                            cv2.putText(annotated, event.direction, (x1, min(height - 8, y2 + 22)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
-
-                if self.draw_trajectories:
-                    for points in trajectories.values():
-                        if len(points) > 1:
-                            cv2.polylines(annotated, [np.array(points, dtype=np.int32)],
-                                          False, (255, 120, 0), 2)
-
-                elapsed = max(time.perf_counter() - started, 1e-6)
-                processing_fps = frame_index / elapsed
-                cv2.rectangle(annotated, (8, 8), (310, 104), (25, 25, 25), -1)
-                cv2.putText(annotated, f"IN: {analytics.entered}  OUT: {analytics.exited}",
-                            (18, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-                cv2.putText(annotated, f"Occupancy estimate: {analytics.occupancy}",
-                            (18, 63), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                cv2.putText(annotated, f"Processing: {processing_fps:.1f} FPS",
-                            (18, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                annotated = self._annotate(
+                    frame, results[0], analytics, trajectories, heatmap,
+                    line_y, frame_index / max(time.perf_counter() - started, 1e-6)
+                )
                 writer.write(annotated)
 
                 if progress_callback and total_frames > 0:
                     progress_callback(min(frame_index / total_frames, 1.0))
-
         finally:
             cap.release()
             writer.release()
@@ -121,3 +81,61 @@ class VideoCounter:
             "events": analytics.events_as_dicts(),
             "heatmap_path": heatmap_path,
         }
+
+    def _annotate(self, frame, result, analytics, trajectories, heatmap,
+                  line_y, processing_fps):
+        height, width = frame.shape[:2]
+        annotated = frame.copy()
+        cv2.line(annotated, (0, line_y), (width, line_y), (0, 220, 255), 2)
+        cv2.putText(annotated, "COUNTING LINE", (12, max(24, line_y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
+
+        boxes = result.boxes
+        if boxes is not None and boxes.xyxy is not None:
+            coordinates = boxes.xyxy.cpu().numpy().astype(int)
+            ids = (boxes.id.cpu().numpy().astype(int).tolist()
+                   if boxes.id is not None else [None] * len(coordinates))
+            confidences = (boxes.conf.cpu().numpy().tolist()
+                           if boxes.conf is not None else [None] * len(coordinates))
+
+            for box, track_id, confidence in zip(coordinates, ids, confidences):
+                x1, y1, x2, y2 = box.tolist()
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                label = f"ID {track_id}" if track_id is not None else "Person"
+                if confidence is not None:
+                    label += f" {confidence:.2f}"
+
+                if track_id is not None:
+                    event = analytics.update(track_id, cx, cy)
+                    points = trajectories.setdefault(int(track_id), [])
+                    points.append((cx, cy))
+                    if len(points) > 40:
+                        del points[:-40]
+                    if 0 <= cx < width and 0 <= cy < height:
+                        heatmap[cy, cx] += 1
+                    if event:
+                        cv2.putText(annotated, event.direction, (x1, min(height - 8, y2 + 22)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
+
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (50, 220, 50), 2)
+                cv2.circle(annotated, (cx, cy), 4, (0, 0, 255), -1)
+                cv2.putText(annotated, label, (x1, max(20, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (50, 220, 50), 2)
+
+        if self.draw_trajectories:
+            for points in trajectories.values():
+                if len(points) > 1:
+                    cv2.polylines(annotated, [np.array(points, dtype=np.int32)],
+                                  False, (255, 120, 0), 2)
+
+        current_people = len(boxes) if boxes is not None else 0
+        cv2.rectangle(annotated, (8, 8), (350, 130), (25, 25, 25), -1)
+        cv2.putText(annotated, f"Detected: {current_people}",
+                    (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 1)
+        cv2.putText(annotated, f"IN: {analytics.entered}  OUT: {analytics.exited}",
+                    (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        cv2.putText(annotated, f"Occupancy estimate: {analytics.occupancy}",
+                    (18, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        cv2.putText(annotated, f"Processing: {processing_fps:.1f} FPS",
+                    (18, 114), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        return annotated
