@@ -15,9 +15,12 @@ class VisionCountLiveProcessor(VideoProcessorBase):
 
     def __init__(self, weights="yolo11n.pt", confidence=0.35, image_size=640,
                  device="cpu", tracker="bytetrack.yaml", line_ratio=0.5,
-                 cooldown_seconds=0.75, draw_trajectories=True):
+                 cooldown_seconds=0.75, draw_trajectories=True,
+                 line_orientation="horizontal", in_direction="negative_to_positive"):
         self.detector = PersonDetector(weights, confidence, image_size, device, tracker)
         self.line_ratio = float(line_ratio)
+        self.line_orientation = line_orientation
+        self.in_direction = in_direction
         self.cooldown_seconds = float(cooldown_seconds)
         self.draw_trajectories = bool(draw_trajectories)
         self.analytics = None
@@ -29,17 +32,27 @@ class VisionCountLiveProcessor(VideoProcessorBase):
         image = frame.to_ndarray(format="bgr24")
         height, width = image.shape[:2]
         if self.analytics is None:
+            dimension = height if self.line_orientation == "horizontal" else width
+            line_position = int(dimension * self.line_ratio)
             self.analytics = LineCrossingAnalytics(
-                int(height * self.line_ratio), self.cooldown_seconds
+                cooldown_seconds=self.cooldown_seconds,
+                orientation=self.line_orientation,
+                line_position=line_position,
+                in_direction=self.in_direction,
             )
 
         result = self.detector.track(image)[0]
         self.frame_count += 1
         fps = self.frame_count / max(time.perf_counter() - self.started, 1e-6)
         output = image.copy()
-        line_y = self.analytics.line_y
-        cv2.line(output, (0, line_y), (width, line_y), (0, 220, 255), 2)
-        cv2.putText(output, "COUNTING LINE", (12, max(24, line_y - 10)),
+        line_position = self.analytics.line_position
+        if self.analytics.orientation == "horizontal":
+            cv2.line(output, (0, line_position), (width, line_position), (0, 220, 255), 2)
+            label_position = (12, max(24, line_position - 10))
+        else:
+            cv2.line(output, (line_position, 0), (line_position, height), (0, 220, 255), 2)
+            label_position = (min(max(8, width - 160), line_position + 8), 28)
+        cv2.putText(output, "COUNTING LINE", label_position,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
 
         boxes = result.boxes
