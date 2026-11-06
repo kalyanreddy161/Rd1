@@ -1,0 +1,17 @@
+model:
+  weights: yolo11n.pt
+  confidence: 0.35
+  image_size: 640
+  device: cpu
+
+tracking:
+  default_tracker: bytetrack.yaml
+  track_buffer: 30
+
+analytics:
+  line_position_ratio: 0.5
+  crossing_cooldown_seconds: 0.75
+
+visualization:
+  draw_trajectories: true
+  heatmap: true
