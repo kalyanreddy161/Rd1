@@ -55,7 +55,7 @@ class VideoCounter:
                 results = self.detector.track(frame)
                 annotated = self._annotate(
                     frame, results[0], analytics, trajectories, heatmap,
-                    line_y, frame_index / max(time.perf_counter() - started, 1e-6)
+                    line_y, frame_index / max(time.perf_counter() - started, 1e-6), timestamp
                 )
                 writer.write(annotated)
 
@@ -83,7 +83,7 @@ class VideoCounter:
         }
 
     def _annotate(self, frame, result, analytics, trajectories, heatmap,
-                  line_y, processing_fps):
+                  line_y, processing_fps, timestamp_seconds):
         height, width = frame.shape[:2]
         annotated = frame.copy()
         cv2.line(annotated, (0, line_y), (width, line_y), (0, 220, 255), 2)
@@ -106,7 +106,7 @@ class VideoCounter:
                     label += f" {confidence:.2f}"
 
                 if track_id is not None:
-                    event = analytics.update(track_id, cx, cy)
+                    event = analytics.update(track_id, cx, cy, timestamp_seconds)
                     points = trajectories.setdefault(int(track_id), [])
                     points.append((cx, cy))
                     if len(points) > 40:
