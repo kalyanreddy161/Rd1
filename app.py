@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from streamlit_webrtc import RTCConfiguration, webrtc_streamer
@@ -96,14 +97,29 @@ else:
 
                     st.subheader("People count over video timeline")
                     timeline = pd.DataFrame(metrics["timeline"])
-                    st.line_chart(
-                        timeline,
-                        x="video_time_seconds",
-                        y=["IN", "OUT"],
-                        x_label="Video timeline (seconds)",
-                        y_label="Number of people",
-                        height=380,
+                    chart_data = timeline.melt(
+                        id_vars=["video_time_seconds"],
+                        value_vars=["IN", "OUT"],
+                        var_name="Direction",
+                        value_name="Number of people",
                     )
+                    count_chart = (
+                        alt.Chart(chart_data)
+                        .mark_line(point=True)
+                        .encode(
+                            x=alt.X("video_time_seconds:Q", title="Video timeline (seconds)"),
+                            y=alt.Y("Number of people:Q", title="Number of people", scale=alt.Scale(zero=True)),
+                            color=alt.Color("Direction:N", title="Crossing direction"),
+                            tooltip=[
+                                alt.Tooltip("video_time_seconds:Q", title="Video time", format=".1f"),
+                                alt.Tooltip("Direction:N"),
+                                alt.Tooltip("Number of people:Q"),
+                            ],
+                        )
+                        .properties(height=380)
+                        .interactive()
+                    )
+                    st.altair_chart(count_chart, use_container_width=True)
                     st.caption(
                         "IN and OUT are cumulative crossing counts. The graph records "
                         "one-second samples and additional points when a crossing occurs."
