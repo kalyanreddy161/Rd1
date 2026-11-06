@@ -14,9 +14,12 @@ from .detector import PersonDetector
 class VideoCounter:
     def __init__(self, weights="yolo11n.pt", confidence=0.35, image_size=640,
                  device="cpu", tracker="bytetrack.yaml", line_ratio=0.5,
-                 cooldown_seconds=0.75, draw_trajectories=True):
+                 cooldown_seconds=0.75, draw_trajectories=True,
+                 line_orientation="horizontal", in_direction="negative_to_positive"):
         self.detector = PersonDetector(weights, confidence, image_size, device, tracker)
         self.line_ratio = float(line_ratio)
+        self.line_orientation = line_orientation
+        self.in_direction = in_direction
         self.cooldown_seconds = float(cooldown_seconds)
         self.draw_trajectories = bool(draw_trajectories)
 
@@ -36,8 +39,14 @@ class VideoCounter:
             cap.release()
             raise RuntimeError("Video has invalid frame dimensions.")
 
-        line_y = int(height * self.line_ratio)
-        analytics = LineCrossingAnalytics(line_y, self.cooldown_seconds)
+        dimension = height if self.line_orientation == "horizontal" else width
+        line_position = int(dimension * self.line_ratio)
+        analytics = LineCrossingAnalytics(
+            cooldown_seconds=self.cooldown_seconds,
+            orientation=self.line_orientation,
+            line_position=line_position,
+            in_direction=self.in_direction,
+        )
         writer = cv2.VideoWriter(
             str(raw_output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
         )
@@ -61,11 +70,9 @@ class VideoCounter:
                 previous_event_count = len(analytics.events)
                 annotated = self._annotate(
                     frame, results[0], analytics, trajectories,
-                    line_y, frame_index / max(time.perf_counter() - started, 1e-6), timestamp
+                    frame_index / max(time.perf_counter() - started, 1e-6), timestamp
                 )
                 writer.write(annotated)
-
-                # Keep a compact timeline: one sample per second plus every crossing.
                 if timestamp >= next_sample_time or len(analytics.events) > previous_event_count:
                     timeline.append({
                         "video_time_seconds": round(timestamp, 3),
@@ -75,7 +82,6 @@ class VideoCounter:
                     })
                     while next_sample_time <= timestamp:
                         next_sample_time += 1.0
-
                 if progress_callback and total_frames > 0:
                     progress_callback(min(frame_index / total_frames, 1.0))
         finally:
@@ -84,7 +90,6 @@ class VideoCounter:
 
         if frame_index == 0:
             raise RuntimeError("The selected video contains no readable frames.")
-
         final_timestamp = frame_index / fps
         if timeline[-1]["video_time_seconds"] != round(final_timestamp, 3):
             timeline.append({
@@ -94,8 +99,6 @@ class VideoCounter:
                 "People inside (estimate)": analytics.occupancy,
             })
 
-        # Convert OpenCV's intermediate MPEG-4 output to H.264 for reliable
-        # in-browser playback in Streamlit/Chrome.
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         command = [
             ffmpeg, "-y", "-i", str(raw_output_path),
@@ -125,11 +128,17 @@ class VideoCounter:
         }
 
     def _annotate(self, frame, result, analytics, trajectories,
-                  line_y, processing_fps, timestamp_seconds):
+                  processing_fps, timestamp_seconds):
         height, width = frame.shape[:2]
         annotated = frame.copy()
-        cv2.line(annotated, (0, line_y), (width, line_y), (0, 220, 255), 2)
-        cv2.putText(annotated, "COUNTING LINE", (12, max(24, line_y - 10)),
+        line_position = analytics.line_position
+        if analytics.orientation == "horizontal":
+            cv2.line(annotated, (0, line_position), (width, line_position), (0, 220, 255), 2)
+            label_position = (12, max(24, line_position - 10))
+        else:
+            cv2.line(annotated, (line_position, 0), (line_position, height), (0, 220, 255), 2)
+            label_position = (min(max(8, width - 160), line_position + 8), 28)
+        cv2.putText(annotated, "COUNTING LINE", label_position,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
 
         boxes = result.boxes
@@ -139,14 +148,12 @@ class VideoCounter:
                    if boxes.id is not None else [None] * len(coordinates))
             confidences = (boxes.conf.cpu().numpy().tolist()
                            if boxes.conf is not None else [None] * len(coordinates))
-
             for box, track_id, confidence in zip(coordinates, ids, confidences):
                 x1, y1, x2, y2 = box.tolist()
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                 label = f"ID {track_id}" if track_id is not None else "Person"
                 if confidence is not None:
                     label += f" {confidence:.2f}"
-
                 if track_id is not None:
                     event = analytics.update(track_id, cx, cy, timestamp_seconds)
                     points = trajectories.setdefault(int(track_id), [])
@@ -156,7 +163,6 @@ class VideoCounter:
                     if event:
                         cv2.putText(annotated, event.direction, (x1, min(height - 8, y2 + 22)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
-
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), (50, 220, 50), 2)
                 cv2.circle(annotated, (cx, cy), 4, (0, 0, 255), -1)
                 cv2.putText(annotated, label, (x1, max(20, y1 - 8)),
