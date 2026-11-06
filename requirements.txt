@@ -3,6 +3,7 @@ opencv-python>=4.8.0
 streamlit>=1.36.0
 streamlit-webrtc>=0.47.0
 av>=10.0.0
+imageio-ffmpeg>=0.5.1
 pandas>=2.0.0
 numpy>=1.24.0
 PyYAML>=6.0.0
