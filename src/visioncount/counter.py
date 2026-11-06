@@ -1,8 +1,10 @@
 """OpenCV video pipeline for detection, tracking, and counting."""
 from pathlib import Path
+import subprocess
 import time
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 
 from .analytics import LineCrossingAnalytics
@@ -19,6 +21,8 @@ class VideoCounter:
         self.draw_trajectories = bool(draw_trajectories)
 
     def process(self, input_path, output_path, progress_callback=None):
+        output_path = Path(output_path)
+        raw_output_path = output_path.with_name(output_path.stem + "_opencv.mp4")
         cap = cv2.VideoCapture(str(input_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {input_path}")
@@ -35,14 +39,15 @@ class VideoCounter:
         line_y = int(height * self.line_ratio)
         analytics = LineCrossingAnalytics(line_y, self.cooldown_seconds)
         writer = cv2.VideoWriter(
-            str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+            str(raw_output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
         )
         if not writer.isOpened():
             cap.release()
-            raise RuntimeError("Could not create output video. Check output directory/codecs.")
+            raise RuntimeError("Could not create intermediate video. Check output directory/codecs.")
 
         trajectories = {}
-        heatmap = np.zeros((height, width), dtype=np.float32)
+        timeline = [{"video_time_seconds": 0.0, "IN": 0, "OUT": 0, "People inside (estimate)": 0}]
+        next_sample_time = 1.0
         frame_index = 0
         started = time.perf_counter()
         try:
@@ -53,11 +58,23 @@ class VideoCounter:
                 frame_index += 1
                 timestamp = frame_index / fps
                 results = self.detector.track(frame)
+                previous_event_count = len(analytics.events)
                 annotated = self._annotate(
-                    frame, results[0], analytics, trajectories, heatmap,
+                    frame, results[0], analytics, trajectories,
                     line_y, frame_index / max(time.perf_counter() - started, 1e-6), timestamp
                 )
                 writer.write(annotated)
+
+                # Keep a compact timeline: one sample per second plus every crossing.
+                if timestamp >= next_sample_time or len(analytics.events) > previous_event_count:
+                    timeline.append({
+                        "video_time_seconds": round(timestamp, 3),
+                        "IN": analytics.entered,
+                        "OUT": analytics.exited,
+                        "People inside (estimate)": analytics.occupancy,
+                    })
+                    while next_sample_time <= timestamp:
+                        next_sample_time += 1.0
 
                 if progress_callback and total_frames > 0:
                     progress_callback(min(frame_index / total_frames, 1.0))
@@ -65,12 +82,36 @@ class VideoCounter:
             cap.release()
             writer.release()
 
-        elapsed = max(time.perf_counter() - started, 1e-6)
-        heatmap_path = str(Path(output_path).with_name(Path(output_path).stem + "_heatmap.jpg"))
-        normalized = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
-        cv2.imwrite(heatmap_path, colored)
+        if frame_index == 0:
+            raise RuntimeError("The selected video contains no readable frames.")
 
+        final_timestamp = frame_index / fps
+        if timeline[-1]["video_time_seconds"] != round(final_timestamp, 3):
+            timeline.append({
+                "video_time_seconds": round(final_timestamp, 3),
+                "IN": analytics.entered,
+                "OUT": analytics.exited,
+                "People inside (estimate)": analytics.occupancy,
+            })
+
+        # Convert OpenCV's intermediate MPEG-4 output to H.264 for reliable
+        # in-browser playback in Streamlit/Chrome.
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        command = [
+            ffmpeg, "-y", "-i", str(raw_output_path),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "-an", str(output_path),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            raise RuntimeError(f"Could not encode browser-compatible H.264 video: {detail[-1500:]}") from exc
+        finally:
+            raw_output_path.unlink(missing_ok=True)
+
+        elapsed = max(time.perf_counter() - started, 1e-6)
         return {
             "frames": frame_index,
             "entered": analytics.entered,
@@ -79,10 +120,11 @@ class VideoCounter:
             "peak_occupancy": analytics.peak_occupancy,
             "processing_fps": frame_index / elapsed,
             "events": analytics.events_as_dicts(),
-            "heatmap_path": heatmap_path,
+            "timeline": timeline,
+            "duration_seconds": final_timestamp,
         }
 
-    def _annotate(self, frame, result, analytics, trajectories, heatmap,
+    def _annotate(self, frame, result, analytics, trajectories,
                   line_y, processing_fps, timestamp_seconds):
         height, width = frame.shape[:2]
         annotated = frame.copy()
@@ -111,8 +153,6 @@ class VideoCounter:
                     points.append((cx, cy))
                     if len(points) > 40:
                         del points[:-40]
-                    if 0 <= cx < width and 0 <= cy < height:
-                        heatmap[cy, cx] += 1
                     if event:
                         cv2.putText(annotated, event.direction, (x1, min(height - 8, y2 + 22)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
