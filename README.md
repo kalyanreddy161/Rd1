@@ -1,50 +1,31 @@
 # VisionCount
 
-Real-time human detection, multi-object tracking, directional people counting, and occupancy analytics.
+Human detection, multi-object tracking, and directional people counting from uploaded videos or a live browser webcam.
 
-## Current scope
-
-VisionCount is being developed as a modular Python application with:
+## Features
 
 - YOLO person detection (COCO class 0)
-- Ultralytics tracking with ByteTrack or BoT-SORT
-- OpenCV video input and annotation
-- Configurable virtual counting line
-- Entry, exit, and occupancy statistics
-- Streamlit dashboard for video analysis
-- CSV event export
+- ByteTrack or BoT-SORT tracking
+- Bounding boxes, confidence scores, and tracking IDs
+- Recent movement trajectories
+- Configurable virtual counting line with IN/OUT counts
+- Occupancy estimate and processing FPS
+- Annotated video export, crossing-event CSV, and movement heatmap
+- Two input modes: uploaded video and live webcam
 
-> Tracking IDs are short-term tracker identities, not guaranteed biometric identities. Occlusion, camera motion, and crowded scenes can cause ID switches or missed counts. Validate performance on representative footage before deployment.
-
-## Architecture
-
-```text
-Video source
-    |
-OpenCV frame reader
-    |
-YOLO person detector
-    |
-ByteTrack / BoT-SORT
-    |
-Track IDs + person centroids
-    |
-Virtual-line crossing analytics
-    |
-Annotated video + metrics + CSV events
-    |
-Streamlit dashboard
-```
+> Tracking IDs are short-term tracker identities, not guaranteed biometric identities. Occlusion, camera motion, and crowded scenes can cause ID switches or missed counts.
 
 ## Requirements
 
 - Python 3.10 or 3.11 recommended
-- A webcam or video file
-- Optional NVIDIA GPU with a compatible PyTorch CUDA installation
+- Webcam for live mode
+- Optional NVIDIA GPU with a compatible CUDA-enabled PyTorch installation
 
-## Quick start (Windows PowerShell)
+## Windows setup
 
 ```powershell
+git clone https://github.com/kalyanreddy161/Rd1.git
+cd Rd1
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -52,54 +33,54 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-For CPU-only execution, leave the device setting as `cpu`. For an NVIDIA GPU, install the PyTorch build compatible with your CUDA driver, then set the device to `0` in the dashboard.
+For CPU-only execution, select `cpu` in the sidebar. Select `0` only after confirming CUDA-enabled PyTorch is installed and working.
 
-The first run downloads the configured YOLO weights (default: `yolo11n.pt`) from Ultralytics.
+The first run downloads the configured YOLO weights (default: `yolo11n.pt`).
 
-## Usage
+## Input modes
 
-1. Launch the Streamlit app.
-2. Upload an MP4/AVI/MOV video.
-3. Choose ByteTrack or BoT-SORT.
-4. Configure the counting line and confidence threshold.
-5. Run analysis and inspect the annotated output and metrics.
-6. Download the crossing-event CSV.
+### Upload video
+
+1. Select **Upload video**.
+2. Upload an MP4, AVI, MOV, or MKV file.
+3. Choose ByteTrack or BoT-SORT and configure the confidence threshold and counting line.
+4. Click **Run detection and tracking**.
+5. Inspect and download the annotated output video, heatmap, and crossing-event CSV.
+
+### Live webcam
+
+1. Select **Webcam (live)**.
+2. Press **START** in the webcam panel.
+3. Allow browser camera permission.
+4. Inspect the live annotated stream.
+5. Press **STOP** to end the stream.
+
+Webcam access is provided by WebRTC. It works on localhost and HTTPS deployments. Remote deployments over plain HTTP generally cannot request browser camera access. Network/firewall restrictions may also require TURN server configuration.
+
+## Counting interpretation
+
+- The current implementation counts tracked centroid transitions across a horizontal line.
+- Above-to-below is treated as IN; below-to-above is OUT. Adjust camera placement or code convention as needed.
+- Occupancy is calculated as entries minus exits and clamped at zero. It is an estimate; a video may start mid-session or tracking may miss crossings.
+- Live webcam mode displays the annotated stream and overlays live counts. Video-upload mode also exports a processed MP4.
 
 ## Project layout
 
 ```text
-VisionCount/
+Rd1/
 ├── app.py
 ├── config.yaml
 ├── requirements.txt
 ├── src/
 │   └── visioncount/
-│       ├── __init__.py
 │       ├── analytics.py
 │       ├── counter.py
-│       └── detector.py
+│       ├── detector.py
+│       └── live.py
 ├── tests/
-│   └── test_analytics.py
 └── outputs/
 ```
 
-## Important measurement notes
+## Validation status
 
-- Entry/exit counts are based on tracked centroid crossings of the configured line.
-- Occupancy is calculated as entries minus exits and is clamped at zero. Incorrect or missed crossings can therefore cause occupancy drift.
-- FPS is measured during processing and depends on model size, input resolution, hardware, and tracking configuration.
-- Compare ByteTrack and BoT-SORT on the same videos; do not assume one is always more accurate.
-
-## Roadmap
-
-- [x] Initialize repository and modular project scaffold
-- [ ] Validate installation and baseline inference on target hardware
-- [ ] Test crossing logic on controlled entry/exit clips
-- [ ] Compare ByteTrack and BoT-SORT
-- [ ] Add trajectory and movement heatmap visualization
-- [ ] Add webcam/RTSP reliability and reconnect handling
-- [ ] Add benchmark report and broader automated tests
-
-## License
-
-Project code is released under the MIT License. See [LICENSE](LICENSE).
+The repository contains an initial implementation and unit tests for line-crossing analytics. Run the application locally and test on representative footage before relying on the counts. FPS and counting accuracy depend on hardware, video resolution, camera angle, and scene density.
